@@ -263,19 +263,48 @@ bool IsRunningAsAdmin() {
     return isAdmin != FALSE;
 }
 
-ULONGLONG ScanFolder(const std::wstring& folder) {
+ULONGLONG ScanFolderRecursive(const fs::path& dir, std::error_code& ec) {
     ULONGLONG total = 0;
+    try {
+        for (auto& entry : fs::directory_iterator(dir, ec)) {
+            if (ec) { ec.clear(); continue; }
+            if (fs::is_regular_file(entry, ec)) {
+                ULONGLONG sz = fs::file_size(entry, ec);
+                if (!ec) total += sz;
+            } else if (fs::is_directory(entry, ec)) {
+                total += ScanFolderRecursive(entry.path(), ec);
+            }
+        }
+    } catch (const std::exception&) {
+        // Skip directories that cause filesystem errors
+    }
+    return total;
+}
+
+ULONGLONG ScanFolder(const std::wstring& folder) {
     std::error_code ec;
     fs::path fp(folder);
     if (!fs::exists(fp, ec)) return 0;
-    for (auto& entry : fs::recursive_directory_iterator(fp, ec)) {
-        if (ec) { ec.clear(); continue; }
-        if (fs::is_regular_file(entry, ec)) {
-            ULONGLONG sz = fs::file_size(entry, ec);
-            if (!ec) total += sz;
+    return ScanFolderRecursive(fp, ec);
+}
+
+void DeleteFolderRecursive(const fs::path& dir, ULONGLONG& freed, std::error_code& ec) {
+    try {
+        for (auto& entry : fs::directory_iterator(dir, ec)) {
+            if (ec) { ec.clear(); continue; }
+            if (fs::is_regular_file(entry, ec)) {
+                ULONGLONG sz = fs::file_size(entry, ec);
+                if (!ec) freed += sz;
+                fs::remove(entry, ec);
+                if (ec) g_totalFailed++;
+            } else if (fs::is_directory(entry, ec)) {
+                DeleteFolderRecursive(entry.path(), freed, ec);
+            }
         }
+    } catch (const std::exception&) {
+        g_totalFailed++;
     }
-    return total;
+    fs::remove(dir, ec);
 }
 
 ULONGLONG DeleteFolder(const std::wstring& folder) {
@@ -283,19 +312,7 @@ ULONGLONG DeleteFolder(const std::wstring& folder) {
     std::error_code ec;
     fs::path fp(folder);
     if (!fs::exists(fp, ec)) return 0;
-    for (auto& entry : fs::recursive_directory_iterator(fp, ec)) {
-        if (ec) { ec.clear(); continue; }
-        if (fs::is_regular_file(entry, ec)) {
-            ULONGLONG sz = fs::file_size(entry, ec);
-            if (!ec) freed += sz;
-            fs::remove(entry, ec);
-            if (ec) g_totalFailed++;
-        }
-    }
-    for (auto& entry : fs::recursive_directory_iterator(fp, ec)) {
-        if (ec) { ec.clear(); continue; }
-        fs::remove(entry, ec);
-    }
+    DeleteFolderRecursive(fp, freed, ec);
     fs::remove(fp, ec);
     return freed;
 }
